@@ -1,4 +1,4 @@
-app = "nestjs-auth-o5autq"
+app = "nestjs-products"
 
 [build]
   dockerfile = "Dockerfile"
