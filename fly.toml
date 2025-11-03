@@ -1,4 +1,9 @@
 app = "nestjs-products"
+primary_region = "iad"
+swap_size_mb = 512
+
+[build]
+  dockerfile = "Dockerfile"
 
 [http_service]
   internal_port = 8080
