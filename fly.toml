@@ -1,8 +1,7 @@
 app = "nestjs-products"
-primary_region = "iad"
 
 [http_service]
-  internal_port = 3002
+  internal_port = 8080
   auto_start_machines = true
   auto_stop_machines = "off"
   min_machines_running = 2
