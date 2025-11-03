@@ -3,11 +3,11 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { ProductsService } from './products.service';
 import { ProductsController } from './products.controller';
 import { Product, ProductSchema } from './schemas/product.schema';
-import { AuthModule } from '../auth/auth.module'; // <- ВАЖНО
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
   imports: [
-    AuthModule, // <- чтобы стратегия зарегистрировалась в приложении
+    AuthModule,
     MongooseModule.forFeature([{ name: Product.name, schema: ProductSchema }]),
   ],
   controllers: [ProductsController],
