@@ -10,3 +10,10 @@ export class UpdateProductDto {
   @IsOptional() description?: string;
   @IsOptional() @IsNumber() @Min(0) price?: number;
 }
+
+export type ProductOutDto = {
+  id: string;
+  name: string;
+  description?: string;
+  price: number;
+};
