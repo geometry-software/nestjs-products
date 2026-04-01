@@ -4,6 +4,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { HealthController } from './health.controller';
 import { ProductsModule } from './products/products.module';
 import { ShipmentsModule } from './shipments/shipments.module';
+import { UsersModule } from './users/users.module';
 
 @Module({
   imports: [
@@ -16,7 +17,8 @@ import { ShipmentsModule } from './shipments/shipments.module';
       }),
     }),
     ProductsModule,
-    ShipmentsModule
+    ShipmentsModule,
+    UsersModule
   ],
   controllers: [HealthController],
 })

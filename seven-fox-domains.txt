@@ -1,0 +1,1337 @@
+import { IsIn, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+
+export const SHIPPING_STATUSES = [
+  'pending',
+  'in_transit',
+  'on_the_way',
+  'delivered',
+  'cancelled',
+  'delayed',
+] as const;
+
+export type ShippingStatus = (typeof SHIPPING_STATUSES)[number];
+
+export class CreateShipmentDto {
+  @IsNotEmpty()
+  @IsString()
+  customer: string;
+
+  @IsNotEmpty()
+  @IsString()
+  date: string;
+
+  @IsNotEmpty()
+  @IsString()
+  destination: string;
+}
+
+export class UpdateShipmentDto {
+  @IsOptional()
+  @IsString()
+  customer?: string;
+
+  @IsOptional()
+  @IsString()
+  date?: string;
+
+  @IsOptional()
+  @IsString()
+  destination?: string;
+}
+
+export class UpdateShipmentStatusDto {
+  @IsIn(SHIPPING_STATUSES)
+  status: ShippingStatus;
+
+  @IsOptional()
+  @IsString()
+  note?: string;
+}
+
+export type ShipmentHistoryOutDto = {
+  status: ShippingStatus;
+  note?: string;
+  changedAt: string;
+};
+
+export type ShipmentOutDto = {
+  id: string;
+  customer: string;
+  date: string;
+  destination: string;
+  status: ShippingStatus;
+  createdAt: string;
+  updatedAt: string;
+  history: ShipmentHistoryOutDto[];
+};
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model, Types } from 'mongoose';
+import { CrudService } from '../common/crud/crud.service';
+import { Shipment, ShipmentDocument } from './schemas/shipment.schema';
+import {
+  CreateShipmentDto,
+  ShipmentOutDto,
+  ShippingStatus,
+  UpdateShipmentDto,
+} from './dto/shipment.dto';
+
+@Injectable()
+export class ShipmentsService extends CrudService<
+  ShipmentDocument,
+  CreateShipmentDto,
+  UpdateShipmentDto,
+  ShipmentOutDto
+> {
+  constructor(@InjectModel(Shipment.name) model: Model<ShipmentDocument>) {
+    super(model, {
+      entityName: Shipment.name,
+      filterableFields: [
+        'customer',
+        'date',
+        'destination',
+        'status',
+        'createdAt',
+        'updatedAt',
+      ],
+      sortableFields: ['createdAt', 'updatedAt', 'customer', 'destination', 'date', 'status'],
+      defaultSort: { createdAt: -1 },
+      createDateField: 'createdAt',
+      modifyDateField: 'updatedAt',
+      dateRangeFields: ['createdAt', 'updatedAt'],
+      searchableFields: ['customer', 'destination', 'date', 'status'],
+    });
+  }
+
+  protected override mapCreateDto(dto: CreateShipmentDto): Partial<ShipmentDocument> {
+    return {
+      customer: dto.customer,
+      date: dto.date,
+      destination: dto.destination,
+      status: 'pending',
+      history: [
+        {
+          status: 'pending',
+          changedAt: new Date(),
+        },
+      ],
+    } as Partial<ShipmentDocument>;
+  }
+
+  protected override mapUpdateDto(dto: UpdateShipmentDto): Partial<ShipmentDocument> {
+    return {
+      ...dto,
+    } as Partial<ShipmentDocument>;
+  }
+
+  protected override mapDocToOut(doc: any): ShipmentOutDto {
+    return {
+      id: String(doc._id),
+      customer: doc.customer,
+      date: doc.date,
+      destination: doc.destination,
+      status: doc.status,
+      createdAt: new Date(doc.createdAt).toISOString(),
+      updatedAt: new Date(doc.updatedAt).toISOString(),
+      history: Array.isArray(doc.history)
+        ? doc.history.map((item: any) => ({
+            status: item.status,
+            note: item.note,
+            changedAt: new Date(item.changedAt).toISOString(),
+          }))
+        : [],
+    };
+  }
+
+  async updateStatus(id: string, status: ShippingStatus, note?: string): Promise<ShipmentOutDto> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new NotFoundException(`${Shipment.name} not found`);
+    }
+
+    const now = new Date();
+
+    const doc = await this.model
+      .findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            status,
+            updatedAt: now,
+          },
+          $push: {
+            history: {
+              status,
+              note,
+              changedAt: now,
+            },
+          },
+        },
+        { new: true },
+      )
+      .lean();
+
+    if (!doc) {
+      throw new NotFoundException(`${Shipment.name} not found`);
+    }
+
+    return this.mapDocToOut(doc);
+  }
+}
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { JwtAuthGuard } from '../auth/jwt.guard';
+import { CrudListQueryDto } from '../common/crud/crud.query.dto';
+import { PaginatedResult } from '../common/crud/crud.types';
+import {
+  CreateShipmentDto,
+  ShipmentOutDto,
+  UpdateShipmentDto,
+  UpdateShipmentStatusDto,
+} from './dto/shipment.dto';
+import { ShipmentsService } from './shipments.service';
+
+type ShipmentsFindAllQuery = CrudListQueryDto & Record<string, string | string[]>;
+
+@UseGuards(JwtAuthGuard)
+@Controller('shipments')
+export class ShipmentsController {
+  constructor(private readonly shipmentsService: ShipmentsService) {}
+
+  @Post()
+  create(@Body() dto: CreateShipmentDto): Promise<ShipmentOutDto> {
+    return this.shipmentsService.create(dto);
+  }
+
+  @Get()
+  findAll(@Query() query: ShipmentsFindAllQuery): Promise<PaginatedResult<ShipmentOutDto>> {
+    return this.shipmentsService.findAll(query);
+  }
+
+  @Get(':id')
+  findOne(@Param('id') id: string): Promise<ShipmentOutDto> {
+    return this.shipmentsService.findOne(id);
+  }
+
+  @Patch(':id')
+  update(@Param('id') id: string, @Body() dto: UpdateShipmentDto): Promise<ShipmentOutDto> {
+    return this.shipmentsService.update(id, dto);
+  }
+
+  @Patch(':id/status')
+  updateStatus(
+    @Param('id') id: string,
+    @Body() dto: UpdateShipmentStatusDto,
+  ): Promise<ShipmentOutDto> {
+    return this.shipmentsService.updateStatus(id, dto.status, dto.note);
+  }
+
+  @Delete(':id')
+  remove(@Param('id') id: string): Promise<{ ok: true }> {
+    return this.shipmentsService.remove(id);
+  }
+}
+import { Module } from '@nestjs/common';
+import { MongooseModule } from '@nestjs/mongoose';
+import { AuthModule } from '../auth/auth.module';
+import { Shipment, ShipmentSchema } from './schemas/shipment.schema';
+import { ShipmentsController } from './shipments.controller';
+import { ShipmentsService } from './shipments.service';
+
+@Module({
+  imports: [
+    AuthModule,
+    MongooseModule.forFeature([{ name: Shipment.name, schema: ShipmentSchema }]),
+  ],
+  controllers: [ShipmentsController],
+  providers: [ShipmentsService],
+})
+export class ShipmentsModule {}
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import { HydratedDocument } from 'mongoose';
+import { SHIPPING_STATUSES } from '../dto/shipment.dto';
+import type { ShippingStatus } from '../dto/shipment.dto';
+
+export type ShipmentDocument = HydratedDocument<Shipment>;
+
+@Schema({ _id: false, versionKey: false })
+export class ShipmentHistoryItem {
+  @Prop({ type: String, enum: SHIPPING_STATUSES, required: true })
+  status: ShippingStatus;
+
+  @Prop({ type: String, required: false, trim: true })
+  note?: string;
+
+  @Prop({ type: Date, required: true })
+  changedAt: Date;
+}
+
+const ShipmentHistoryItemSchema = SchemaFactory.createForClass(ShipmentHistoryItem);
+
+@Schema({ collection: 'shipments', versionKey: false })
+export class Shipment {
+  @Prop({ type: String, required: true, trim: true })
+  customer: string;
+
+  @Prop({ type: String, required: true, trim: true })
+  date: string;
+
+  @Prop({ type: String, required: true, trim: true })
+  destination: string;
+
+  @Prop({ type: String, enum: SHIPPING_STATUSES, required: true, default: 'pending' })
+  status: ShippingStatus;
+
+  @Prop({ type: [ShipmentHistoryItemSchema], required: true, default: [] })
+  history: ShipmentHistoryItem[];
+
+  @Prop({ type: Date, required: true })
+  createdAt: Date;
+
+  @Prop({ type: Date, required: true })
+  updatedAt: Date;
+}
+
+export const ShipmentSchema = SchemaFactory.createForClass(Shipment);
+
+ShipmentSchema.index({ customer: 1 });
+ShipmentSchema.index({ destination: 1 });
+ShipmentSchema.index({ status: 1 });
+ShipmentSchema.index({ createdAt: -1 });
+ShipmentSchema.index({ updatedAt: -1 });
+import { IsNotEmpty, IsNumber, IsOptional, Min } from 'class-validator';
+
+export class CreateProductDto {
+  @IsNotEmpty() name: string;
+  @IsOptional() description?: string;
+  @IsNumber() @Min(0) price: number;
+}
+export class UpdateProductDto {
+  @IsOptional() name?: string;
+  @IsOptional() description?: string;
+  @IsOptional() @IsNumber() @Min(0) price?: number;
+}
+
+export type ProductOutDto = {
+  id: string;
+  name: string;
+  description?: string;
+  price: number;
+};
+import { Injectable } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { CrudService } from '../common/crud/crud.service';
+import { Product, ProductDocument } from './schemas/product.schema';
+import { CreateProductDto, ProductOutDto, UpdateProductDto } from './dto/product.dto';
+
+@Injectable()
+export class ProductsService extends CrudService<
+  ProductDocument,
+  CreateProductDto,
+  UpdateProductDto,
+  ProductOutDto
+> {
+  constructor(@InjectModel(Product.name) model: Model<ProductDocument>) {
+    super(model, {
+      entityName: Product.name,
+      filterableFields: ['name', 'description', 'price', 'active', 'createdAt', 'updatedAt'],
+      sortableFields: ['createdAt', 'updatedAt', 'price', 'name'],
+      defaultSort: { createdAt: -1 },
+      createDateField: 'createdAt',
+      modifyDateField: 'updatedAt',
+      dateRangeFields: ['createdAt', 'updatedAt'],
+      searchableFields: ['name', 'description'],
+    });
+  }
+
+}
+
+import { Module } from '@nestjs/common';
+import { MongooseModule } from '@nestjs/mongoose';
+import { ProductsService } from './products.service';
+import { ProductsController } from './products.controller';
+import { Product, ProductSchema } from './schemas/product.schema';
+import { AuthModule } from '../auth/auth.module';
+
+@Module({
+  imports: [
+    AuthModule,
+    MongooseModule.forFeature([{ name: Product.name, schema: ProductSchema }]),
+  ],
+  controllers: [ProductsController],
+  providers: [ProductsService],
+})
+export class ProductsModule {}
+
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import { HydratedDocument } from 'mongoose';
+
+export type ProductDocument = HydratedDocument<Product>;
+
+@Schema({ collection: 'products', versionKey: false })
+export class Product {
+  @Prop({ type: String, required: true, trim: true })
+  name: string;
+
+  @Prop({ type: String, required: false, trim: true })
+  description?: string;
+
+  @Prop({ type: Number, required: true, min: 0 })
+  price: number;
+
+  @Prop({ type: Boolean, required: true, default: true })
+  active: boolean;
+
+  @Prop({ type: Date, required: true })
+  createdAt: Date;
+
+  @Prop({ type: Date, required: true })
+  updatedAt: Date;
+}
+
+export const ProductSchema = SchemaFactory.createForClass(Product);
+
+ProductSchema.index({ name: 1 });
+ProductSchema.index({ price: 1 });
+ProductSchema.index({ createdAt: -1 });
+ProductSchema.index({ updatedAt: -1 });
+
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { JwtAuthGuard } from '../auth/jwt.guard';
+import { CrudListQueryDto } from '../common/crud/crud.query.dto';
+import { ProductsService } from './products.service';
+import { CreateProductDto, ProductOutDto, UpdateProductDto } from './dto/product.dto';
+import { PaginatedResult } from '../common/crud/crud.types';
+
+type ProductsFindAllQuery = CrudListQueryDto & Record<string, string | string[]>;
+
+@UseGuards(JwtAuthGuard)
+@Controller('products')
+export class ProductsController {
+  constructor(private readonly productsService: ProductsService) {}
+
+  @Post()
+  create(@Body() dto: CreateProductDto): Promise<ProductOutDto> {
+    return this.productsService.create(dto);
+  }
+
+  @Get()
+  findAll(@Query() query: ProductsFindAllQuery): Promise<PaginatedResult<ProductOutDto>> {
+    return this.productsService.findAll(query);
+  }
+
+  @Get(':id')
+  findOne(@Param('id') id: string): Promise<ProductOutDto> {
+    return this.productsService.findOne(id);
+  }
+
+  @Patch(':id')
+  update(@Param('id') id: string, @Body() dto: UpdateProductDto): Promise<ProductOutDto> {
+    return this.productsService.update(id, dto);
+  }
+
+  @Delete(':id')
+  remove(@Param('id') id: string): Promise<{ ok: true }> {
+    return this.productsService.remove(id);
+  }
+}
+
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+import { ValidationPipe } from '@nestjs/common';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+
+  app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+  app.setGlobalPrefix('api');
+
+  // @ts-ignore
+  app.set('trust proxy', 1);
+
+  const allowedOrigins = [
+    'http://localhost:4200',
+    'http://localhost:5173',
+    'https://your-frontend.vercel.app',
+    /\.fly\.dev$/,
+  ];
+
+  app.enableCors({
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (
+        allowedOrigins.includes(origin) ||
+        allowedOrigins.some(o => o instanceof RegExp && o.test(origin))
+      ) {
+        return callback(null, true);
+      }
+      console.warn(`❌ Blocked by CORS: ${origin}`);
+      return callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true,
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    exposedHeaders: ['Content-Disposition'],
+    maxAge: 86400,
+  });
+
+  const port = Number(process.env.PORT ?? 8080);
+  await app.listen(port, '0.0.0.0');
+  console.log(`✅ Product listening on http://localhost:${port}/api`);
+}
+
+bootstrap();
+
+import { Injectable } from '@nestjs/common';
+import { PassportStrategy } from '@nestjs/passport';
+import { ExtractJwt, Strategy } from 'passport-jwt';
+import { ConfigService } from '@nestjs/config';
+import { UserRole } from '../users/dto/user.dto';
+
+@Injectable()
+export class JwtStrategy extends PassportStrategy(Strategy) {
+  constructor(cfg: ConfigService) {
+    super({
+      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      secretOrKey: cfg.getOrThrow<string>('JWT_SECRET'),
+      ignoreExpiration: false,
+    });
+  }
+
+  async validate(payload: { sub: string; email: string; role: UserRole }) {
+    return {
+      userId: payload.sub,
+      email: payload.email,
+      role: payload.role,
+    };
+  }
+}
+import { Injectable } from '@nestjs/common';
+
+@Injectable()
+export class JwtService {}
+
+import { Module } from '@nestjs/common';
+import { PassportModule } from '@nestjs/passport';
+import { JwtModule } from '@nestjs/jwt';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { JwtStrategy } from './jwt.strategy';
+
+@Module({
+  imports: [
+    ConfigModule,
+    PassportModule.register({ defaultStrategy: 'jwt' }),
+    JwtModule.registerAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (cfg: ConfigService) => ({
+        secret: cfg.getOrThrow<string>('JWT_SECRET'),
+        signOptions: { expiresIn: Number(cfg.get('JWT_EXPIRES_IN') ?? 3600) },
+      }),
+    }),
+  ],
+  providers: [JwtStrategy],
+  exports: [PassportModule, JwtModule],
+})
+export class AuthModule {}
+
+import { Injectable } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
+
+@Injectable()
+export class JwtAuthGuard extends AuthGuard('jwt') {}
+
+import { Injectable } from '@nestjs/common';
+
+@Injectable()
+export class AppService {
+  getHello(): string {
+    return 'Hello World!';
+  }
+}
+
+import { Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { MongooseModule } from '@nestjs/mongoose';
+import { HealthController } from './health.controller';
+import { ProductsModule } from './products/products.module';
+import { ShipmentsModule } from './shipments/shipments.module';
+import { UsersModule } from './users/users.module';
+
+@Module({
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true }),
+    MongooseModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (cfg: ConfigService) => ({
+        uri: cfg.getOrThrow<string>('MONGODB_URI'),
+      }),
+    }),
+    ProductsModule,
+    ShipmentsModule,
+    UsersModule
+  ],
+  controllers: [HealthController],
+})
+export class AppModule {}
+
+export type SortDir = 1 | -1;
+export type SortOrder = 'asc' | 'desc';
+
+export type PaginatedResult<T> = {
+  data: T[];
+  meta: {
+    page: number;
+    limit: number;
+    total: number;
+    pages: number;
+    sortBy?: string;
+    sortOrder?: SortOrder;
+    query?: string;
+  };
+};
+
+export type CrudListQuery = {
+  page?: number | string;
+  limit?: number | string;
+  sortBy?: string;
+  sortOrder?: SortOrder;
+  query?: string;
+};
+
+export type CrudFindAllQuery = CrudListQuery & Record<string, unknown>;
+
+import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { Type } from 'class-transformer';
+
+export class CrudListQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number;
+
+  @IsOptional()
+  @IsString()
+  sortBy?: string;
+
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc';
+
+  @IsOptional()
+  @IsString()
+  query?: string;
+}
+
+import { NotFoundException } from '@nestjs/common';
+import { Model, Types } from 'mongoose';
+import { CrudFindAllQuery, PaginatedResult, SortDir, SortOrder } from './crud.types';
+
+export type CrudOptions = {
+  entityName: string;
+  filterableFields?: string[];
+  sortableFields?: string[];
+  defaultSort?: Record<string, SortDir>;
+  defaultLimit?: number;
+  maxLimit?: number;
+  createDateField?: string;
+  modifyDateField?: string;
+  dateRangeFields?: string[];
+  searchableFields?: string[];
+};
+
+export class CrudService<
+  TDoc extends { _id: any },
+  TCreateDto = unknown,
+  TUpdateDto = unknown,
+  TOut = unknown
+> {
+  protected readonly entityName: string;
+  protected readonly filterableFields: string[];
+  protected readonly sortableFields: string[];
+  protected readonly defaultSort: Record<string, SortDir>;
+  protected readonly defaultLimit: number;
+  protected readonly maxLimit: number;
+  protected readonly createDateField: string | null;
+  protected readonly modifyDateField: string | null;
+  protected readonly dateRangeFields: string[];
+  protected readonly searchableFields: string[];
+
+  private readonly systemKeys = new Set(['page', 'limit', 'sortBy', 'sortOrder', 'query']);
+
+  constructor(
+    protected readonly model: Model<TDoc>,
+    opts: CrudOptions,
+  ) {
+    this.entityName = opts.entityName;
+    this.filterableFields = opts.filterableFields ?? [];
+    this.sortableFields = opts.sortableFields ?? ['createdAt'];
+    this.defaultSort = opts.defaultSort ?? { createdAt: -1 };
+    this.defaultLimit = opts.defaultLimit ?? 20;
+    this.maxLimit = opts.maxLimit ?? 100;
+    this.createDateField = opts.createDateField ?? null;
+    this.modifyDateField = opts.modifyDateField ?? null;
+    this.dateRangeFields = opts.dateRangeFields ?? [];
+    this.searchableFields = opts.searchableFields ?? [];
+  }
+
+  protected mapCreateDto(dto: TCreateDto): Partial<TDoc> {
+    return dto as any;
+  }
+
+  protected mapUpdateDto(dto: TUpdateDto): Partial<TDoc> {
+    return dto as any;
+  }
+
+  protected mapDocToOut(doc: any): TOut {
+    return doc as TOut;
+  }
+
+  async create(dto: TCreateDto): Promise<TOut> {
+    const now = new Date();
+
+    const data: any = {
+      ...this.mapCreateDto(dto),
+    };
+
+    if (this.createDateField) data[this.createDateField] = now;
+    if (this.modifyDateField) data[this.modifyDateField] = now;
+
+    const created = await this.model.create(data);
+    const plain = (created as any).toObject ? (created as any).toObject() : created;
+
+    return this.mapDocToOut(plain);
+  }
+
+  async findAll(query: CrudFindAllQuery = {}): Promise<PaginatedResult<TOut>> {
+    const page = this.normalizePage(query.page);
+    const limit = this.normalizeLimit(query.limit);
+    const skip = (page - 1) * limit;
+
+    const filter = this.buildFilter(query);
+    const sort = this.buildSort(
+      typeof query.sortBy === 'string' ? query.sortBy : undefined,
+      query.sortOrder,
+    );
+
+    const [docs, total] = await Promise.all([
+      this.model.find(filter as any).sort(sort).skip(skip).limit(limit).lean(),
+      this.model.countDocuments(filter as any),
+    ]);
+
+    const pages = Math.max(1, Math.ceil(total / limit));
+
+    return {
+      data: (docs as any[]).map(d => this.mapDocToOut(d)),
+      meta: {
+        page,
+        limit,
+        total,
+        pages,
+        sortBy: typeof query.sortBy === 'string' ? query.sortBy : undefined,
+        sortOrder: query.sortOrder,
+        query: typeof query.query === 'string' ? query.query : undefined,
+      },
+    };
+  }
+
+  async findOne(id: string): Promise<TOut> {
+    this.assertObjectId(id);
+
+    const doc = await this.model.findById(id).lean();
+    if (!doc) throw new NotFoundException(`${this.entityName} not found`);
+
+    return this.mapDocToOut(doc as any);
+  }
+
+  async update(id: string, dto: TUpdateDto): Promise<TOut> {
+    this.assertObjectId(id);
+
+    const data: any = {
+      ...this.mapUpdateDto(dto),
+    };
+
+    if (this.modifyDateField) data[this.modifyDateField] = new Date();
+
+    const doc = await this.model.findByIdAndUpdate(id, data, { new: true }).lean();
+    if (!doc) throw new NotFoundException(`${this.entityName} not found`);
+
+    return this.mapDocToOut(doc as any);
+  }
+
+  async remove(id: string): Promise<{ ok: true }> {
+    this.assertObjectId(id);
+
+    const doc = await this.model.findByIdAndDelete(id).lean();
+    if (!doc) throw new NotFoundException(`${this.entityName} not found`);
+
+    return { ok: true };
+  }
+
+  protected normalizePage(value: unknown): number {
+    const n = typeof value === 'string' ? Number(value) : (value as number);
+    if (!Number.isFinite(n) || n < 1) return 1;
+    return Math.floor(n);
+  }
+
+  protected normalizeLimit(value: unknown): number {
+    const n = typeof value === 'string' ? Number(value) : (value as number);
+    if (!Number.isFinite(n) || n < 1) return this.defaultLimit;
+    return Math.min(this.maxLimit, Math.floor(n));
+  }
+
+  protected buildSort(sortBy?: string, sortOrder?: SortOrder): Record<string, SortDir> {
+    if (!sortBy) return this.defaultSort;
+    if (!this.sortableFields.includes(sortBy)) return this.defaultSort;
+    return { [sortBy]: sortOrder === 'asc' ? 1 : -1 };
+  }
+
+  protected buildFilter(query: Record<string, unknown>): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    const range = this.buildDateRanges(query);
+
+    for (const key of Object.keys(query)) {
+      if (this.systemKeys.has(key)) continue;
+      if (this.isRangeKey(key)) continue;
+      if (!this.filterableFields.includes(key)) continue;
+      if (range.has(key)) continue;
+
+      const raw = query[key];
+      if (raw === undefined || raw === null) continue;
+
+      const v = Array.isArray(raw) ? raw[0] : raw;
+
+      if (typeof v === 'boolean' || typeof v === 'number') {
+        out[key] = v;
+        continue;
+      }
+
+      if (typeof v !== 'string') {
+        out[key] = v;
+        continue;
+      }
+
+      const trimmed = v.trim();
+      if (!trimmed) continue;
+
+      if (trimmed === 'true' || trimmed === 'false') {
+        out[key] = trimmed === 'true';
+        continue;
+      }
+
+      const asNum = Number(trimmed);
+      if (Number.isFinite(asNum)) {
+        out[key] = asNum;
+        continue;
+      }
+
+      out[key] = trimmed;
+    }
+
+    for (const [field, cond] of range.entries()) {
+      out[field] = cond;
+    }
+
+    const search = this.buildQuerySearch(query);
+    if (search) {
+      out.$or = search.$or;
+    }
+
+    return out;
+  }
+
+  protected buildQuerySearch(query: Record<string, unknown>): { $or: Record<string, unknown>[] } | null {
+    const q = typeof query.query === 'string' ? query.query.trim() : '';
+    if (!q) return null;
+    if (!this.searchableFields.length) return null;
+
+    const safe = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    return {
+      $or: this.searchableFields.map(field => ({
+        [field]: { $regex: safe, $options: 'i' },
+      })),
+    };
+  }
+
+  protected buildDateRanges(query: Record<string, unknown>): Map<string, Record<string, Date>> {
+    const out = new Map<string, Record<string, Date>>();
+
+    for (const field of this.dateRangeFields) {
+      if (!this.filterableFields.includes(field)) continue;
+
+      const fromKey = `${field}From`;
+      const toKey = `${field}To`;
+
+      const fromRaw = query[fromKey];
+      const toRaw = query[toKey];
+
+      const fromStr = Array.isArray(fromRaw) ? fromRaw[0] : fromRaw;
+      const toStr = Array.isArray(toRaw) ? toRaw[0] : toRaw;
+
+      const cond: Record<string, Date> = {};
+
+      if (typeof fromStr === 'string' && fromStr.trim()) {
+        const d = new Date(fromStr.trim());
+        if (!Number.isNaN(d.getTime())) cond.$gte = d;
+      }
+
+      if (typeof toStr === 'string' && toStr.trim()) {
+        const d = new Date(toStr.trim());
+        if (!Number.isNaN(d.getTime())) cond.$lte = d;
+      }
+
+      if (Object.keys(cond).length) out.set(field, cond);
+    }
+
+    return out;
+  }
+
+  protected isRangeKey(key: string): boolean {
+    return key.endsWith('From') || key.endsWith('To');
+  }
+
+  protected assertObjectId(id: string): void {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new NotFoundException(`${this.entityName} not found`);
+    }
+  }
+}
+
+import { Test, TestingModule } from '@nestjs/testing';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
+
+describe('AppController', () => {
+  let appController: AppController;
+
+  beforeEach(async () => {
+    const app: TestingModule = await Test.createTestingModule({
+      controllers: [AppController],
+      providers: [AppService],
+    }).compile();
+
+    appController = app.get<AppController>(AppController);
+  });
+
+  describe('root', () => {
+    it('should return "Hello World!"', () => {
+      expect(appController.getHello()).toBe('Hello World!');
+    });
+  });
+});
+
+import {
+  IsBoolean,
+  IsEmail,
+  IsEnum,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MinLength,
+} from 'class-validator';
+
+export const USER_ROLES = ['admin', 'user'] as const;
+
+export type UserRole = (typeof USER_ROLES)[number];
+
+export class CreateUserDto {
+  @IsNotEmpty()
+  @IsString()
+  firstName: string;
+
+  @IsNotEmpty()
+  @IsString()
+  lastName: string;
+
+  @IsNotEmpty()
+  @IsEmail()
+  email: string;
+
+  @IsNotEmpty()
+  @IsString()
+  @MinLength(6)
+  password: string;
+
+  @IsOptional()
+  @IsEnum(USER_ROLES)
+  role?: UserRole;
+}
+
+export class UpdateUserDto {
+  @IsOptional()
+  @IsString()
+  firstName?: string;
+
+  @IsOptional()
+  @IsString()
+  lastName?: string;
+
+  @IsOptional()
+  @IsEmail()
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(6)
+  password?: string;
+
+  @IsOptional()
+  @IsEnum(USER_ROLES)
+  role?: UserRole;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+}
+
+export type UserOutDto = {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  role: UserRole;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model, Types } from 'mongoose';
+import * as bcrypt from 'bcrypt';
+import { CrudService } from '../common/crud/crud.service';
+import { User, UserDocument } from './schemas/user.schema';
+import { CreateUserDto, UpdateUserDto, UserOutDto, UserRole } from './dto/user.dto';
+
+type AuthUser = {
+  userId: string;
+  email: string;
+  role: UserRole;
+};
+
+@Injectable()
+export class UsersService extends CrudService<
+  UserDocument,
+  CreateUserDto,
+  UpdateUserDto,
+  UserOutDto
+> {
+  constructor(@InjectModel(User.name) model: Model<UserDocument>) {
+    super(model, {
+      entityName: User.name,
+      filterableFields: ['firstName', 'lastName', 'email', 'role', 'isActive', 'createdAt', 'updatedAt'],
+      sortableFields: ['createdAt', 'updatedAt', 'firstName', 'lastName', 'email', 'role'],
+      defaultSort: { createdAt: -1 },
+      createDateField: 'createdAt',
+      modifyDateField: 'updatedAt',
+      dateRangeFields: ['createdAt'],
+      searchableFields: ['firstName', 'lastName', 'email'],
+    });
+  }
+
+  protected override mapDocToOut(doc: any): UserOutDto {
+    return {
+      id: String(doc._id),
+      firstName: doc.firstName,
+      lastName: doc.lastName,
+      email: doc.email,
+      role: doc.role,
+      isActive: doc.isActive,
+      createdAt: new Date(doc.createdAt).toISOString(),
+      updatedAt: new Date(doc.updatedAt).toISOString(),
+    };
+  }
+
+  async createByAdmin(dto: CreateUserDto): Promise<UserOutDto> {
+    const email = dto.email.trim().toLowerCase();
+    const exists = await this.model.exists({ email });
+
+    if (exists) {
+      throw new BadRequestException('Email already in use');
+    }
+
+    const now = new Date();
+    const password = await bcrypt.hash(dto.password, this.getSaltRounds());
+
+    const created = await this.model.create({
+      firstName: dto.firstName.trim(),
+      lastName: dto.lastName.trim(),
+      email,
+      password,
+      role: dto.role ?? 'user',
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const plain = created.toObject ? created.toObject() : created;
+    return this.mapDocToOut(plain);
+  }
+
+  async findOneForActor(id: string, actor: AuthUser): Promise<UserOutDto> {
+    this.assertObjectId(id);
+
+    if (actor.role !== 'admin' && actor.userId !== id) {
+      throw new ForbiddenException('You can only view your own user');
+    }
+
+    const doc = await this.model.findById(id).lean();
+
+    if (!doc) {
+      throw new NotFoundException(`${User.name} not found`);
+    }
+
+    return this.mapDocToOut(doc);
+  }
+
+  async updateForActor(id: string, dto: UpdateUserDto, actor: AuthUser): Promise<UserOutDto> {
+    this.assertObjectId(id);
+
+    const isAdmin = actor.role === 'admin';
+    const isSelf = actor.userId === id;
+
+    if (!isAdmin && !isSelf) {
+      throw new ForbiddenException('You can only update your own user');
+    }
+
+    const next: Record<string, unknown> = {};
+
+    if (typeof dto.firstName === 'string') next.firstName = dto.firstName.trim();
+    if (typeof dto.lastName === 'string') next.lastName = dto.lastName.trim();
+
+    if (typeof dto.email === 'string') {
+      const email = dto.email.trim().toLowerCase();
+      const existing = await this.model.findOne({ email, _id: { $ne: id } }).lean();
+
+      if (existing) {
+        throw new BadRequestException('Email already in use');
+      }
+
+      next.email = email;
+    }
+
+    if (typeof dto.password === 'string' && dto.password.trim()) {
+      next.password = await bcrypt.hash(dto.password, this.getSaltRounds());
+    }
+
+    if (isAdmin) {
+      if (dto.role) next.role = dto.role;
+      if (typeof dto.isActive === 'boolean') next.isActive = dto.isActive;
+    }
+
+    next.updatedAt = new Date();
+
+    const doc = await this.model.findByIdAndUpdate(id, next, { new: true }).lean();
+
+    if (!doc) {
+      throw new NotFoundException(`${User.name} not found`);
+    }
+
+    return this.mapDocToOut(doc);
+  }
+
+  async removeForAdmin(id: string): Promise<{ ok: true }> {
+    return this.remove(id);
+  }
+
+  async findByEmail(email: string): Promise<UserDocument | null> {
+    return this.model.findOne({ email: email.trim().toLowerCase() });
+  }
+
+  protected override assertObjectId(id: string): void {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new NotFoundException(`${User.name} not found`);
+    }
+  }
+
+  private getSaltRounds(): number {
+    const roundsEnv = process.env.BCRYPT_SALT ?? '10';
+    const roundsParsed = parseInt(roundsEnv, 10);
+    return Math.min(15, Math.max(4, Number.isFinite(roundsParsed) ? roundsParsed : 10));
+  }
+}
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  UnauthorizedException,
+  UseGuards,
+} from '@nestjs/common';
+import { JwtAuthGuard } from '../auth/jwt.guard';
+import { CrudListQueryDto } from '../common/crud/crud.query.dto';
+import { PaginatedResult } from '../common/crud/crud.types';
+import { CreateUserDto, UpdateUserDto, UserOutDto, UserRole } from './dto/user.dto';
+import { UsersService } from './users.service';
+
+type UsersFindAllQuery = CrudListQueryDto & Record<string, string | string[]>;
+type AuthUser = { userId: string; email: string; role: UserRole };
+
+@UseGuards(JwtAuthGuard)
+@Controller('users')
+export class UsersController {
+  constructor(private readonly usersService: UsersService) {}
+
+  @Post()
+  async create(@Body() dto: CreateUserDto, @Req() req: { user: AuthUser }): Promise<UserOutDto> {
+    if (req.user.role !== 'admin') {
+      throw new UnauthorizedException('Only admin can create users');
+    }
+
+    return this.usersService.createByAdmin(dto);
+  }
+
+  @Get()
+  async findAll(
+    @Query() query: UsersFindAllQuery,
+    @Req() req: { user: AuthUser },
+  ): Promise<PaginatedResult<UserOutDto>> {
+    if (req.user.role !== 'admin') {
+      throw new UnauthorizedException('Only admin can list users');
+    }
+
+    return this.usersService.findAll(query);
+  }
+
+  @Get(':id')
+  findOne(@Param('id') id: string, @Req() req: { user: AuthUser }): Promise<UserOutDto> {
+    return this.usersService.findOneForActor(id, req.user);
+  }
+
+  @Patch(':id')
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateUserDto,
+    @Req() req: { user: AuthUser },
+  ): Promise<UserOutDto> {
+    return this.usersService.updateForActor(id, dto, req.user);
+  }
+
+  @Delete(':id')
+  async remove(@Param('id') id: string, @Req() req: { user: AuthUser }): Promise<{ ok: true }> {
+    if (req.user.role !== 'admin') {
+      throw new UnauthorizedException('Only admin can delete users');
+    }
+
+    return this.usersService.removeForAdmin(id);
+  }
+}
+import { Module } from '@nestjs/common';
+import { MongooseModule } from '@nestjs/mongoose';
+import { AuthModule } from '../auth/auth.module';
+import { User, UserSchema } from './schemas/user.schema';
+import { UsersController } from './users.controller';
+import { UsersService } from './users.service';
+
+@Module({
+  imports: [
+    AuthModule,
+    MongooseModule.forFeature([{ name: User.name, schema: UserSchema }]),
+  ],
+  controllers: [UsersController],
+  providers: [UsersService],
+  exports: [UsersService],
+})
+export class UsersModule {}
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import { HydratedDocument } from 'mongoose';
+import { USER_ROLES } from '../dto/user.dto';
+import type { UserRole } from '../dto/user.dto';
+
+export type UserDocument = HydratedDocument<User>;
+
+@Schema({ collection: 'users', versionKey: false })
+export class User {
+  @Prop({ type: String, required: true, trim: true })
+  firstName: string;
+
+  @Prop({ type: String, required: true, trim: true })
+  lastName: string;
+
+  @Prop({ type: String, required: true, unique: true, lowercase: true, trim: true })
+  email: string;
+
+  @Prop({ type: String, required: true, select: false })
+  password: string;
+
+  @Prop({ type: String, enum: USER_ROLES, required: true, default: 'user' })
+  role: UserRole;
+
+  @Prop({ type: Boolean, required: true, default: true })
+  isActive: boolean;
+
+  @Prop({ type: Date, required: true })
+  createdAt: Date;
+
+  @Prop({ type: Date, required: true })
+  updatedAt: Date;
+}
+
+export const UserSchema = SchemaFactory.createForClass(User);
+
+UserSchema.index({ email: 1 }, { unique: true });
+UserSchema.index({ role: 1 });
+UserSchema.index({ isActive: 1 });
+UserSchema.index({ createdAt: -1 });
+UserSchema.index({ updatedAt: -1 });
+import { Controller, Get } from '@nestjs/common';
+
+@Controller()
+export class HealthController {
+  @Get('health')
+  health() {
+    return { ok: true };
+  }
+}
+
+import { Controller, Get } from '@nestjs/common';
+import { AppService } from './app.service';
+
+@Controller()
+export class AppController {
+  constructor(private readonly appService: AppService) {}
+
+  @Get()
+  getHello(): string {
+    return this.appService.getHello();
+  }
+}
+
