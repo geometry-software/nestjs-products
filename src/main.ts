@@ -14,7 +14,7 @@ async function bootstrap() {
   const allowedOrigins = [
     'http://localhost:4200',
     'http://localhost:5173',
-    'https://your-frontend.vercel.app',
+     'https://geometry-frontend-react.web.app',
     /\.fly\.dev$/,
   ];
 
